@@ -1,0 +1,7 @@
+moviepy==1.0.3
+pytube==12.1.0
+tensorflow==2.10.0
+numpy==1.21.5
+ytdl-core@4.11.5
+fluent-ffmpeg@2.1.2
+openai@4.28.0
