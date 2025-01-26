@@ -330,205 +330,126 @@ class YouTubeShortsGenerator {
         try {
             console.log('\nГлубокий анализ видео для поиска эмоциональных моментов...');
             const duration = await this.getVideoDuration(videoPath);
-            const intervals = 5; // Уменьшаем интервал для более точного анализа
-            const segments = [];
 
+            // Адаптивный интервал анализа в зависимости от длительности видео
+            const intervals = duration <= 600 ? 3 : // До 10 минут
+                            duration <= 1800 ? 5 : // До 30 минут
+                            10; // Более 30 минут
+
+            console.log(`📊 Выбран интервал анализа: ${intervals} секунд`);
+            console.log(`💰 Ожидаемое количество токенов: ${Math.ceil(duration/intervals * 500)}`);
+
+            const segments = [];
             let sessionTokens = 0;
             let sessionCost = 0;
             let segmentsAnalyzed = 0;
             const totalSegments = Math.ceil(duration / intervals);
 
-            const tempDir = path.join(this.outputDir, 'temp_analysis');
+            // Создаем временную директорию с уникальным идентификатором
+            const sessionId = Date.now();
+            const tempDir = path.join(this.outputDir, `temp_analysis_${sessionId}`);
             await fs.mkdir(tempDir, { recursive: true });
 
-            for (let time = 0; time < duration; time += intervals) {
+            // Предварительный быстрый анализ для определения потенциально интересных сегментов
+            console.log('\n🔍 Предварительный анализ видео...');
+            const potentialSegments = await this.quickScan(videoPath, intervals);
+
+            for (const segment of potentialSegments) {
                 try {
                     segmentsAnalyzed++;
-                    console.log(`\n🎬 Анализ сегмента ${segmentsAnalyzed}/${totalSegments} (${time}с - ${Math.min(time + intervals, duration)}с)`);
+                    const { time } = segment;
+                    console.log(`\n🎬 Анализ сегмента ${segmentsAnalyzed}/${potentialSegments.length} (${time}с - ${Math.min(time + intervals, duration)}с)`);
 
-                    const segmentPath = path.join(tempDir, `segment_${time}.mp4`);
-                    const audioPath = path.join(tempDir, `segment_${time}.wav`);
-                    const framePath = path.join(tempDir, `frame_${time}.jpg`);
+                    // Параллельная обработка аудио и видео
+                    const [motionData, audioData] = await Promise.all([
+                        this.analyzeMotion(segment.path),
+                        this.analyzeAudio(segment.audioPath)
+                    ]);
 
-                    // Извлечение видео сегмента с прогрессом
-                    console.log('\nИзвлечение видео сегмента...');
-                    await new Promise((resolve, reject) => {
-                        const ffmpeg = exec(`ffmpeg -i "${videoPath}" -ss ${time} -t ${intervals} -c:v copy -c:a copy "${segmentPath}"`,
-                            (error, stdout, stderr) => {
-                                if (error) {
-                                    console.error('Ошибка при извлечении сегмента:', stderr);
-                                    reject(error);
-                                } else resolve();
-                            }
-                        );
-
-                        let progress = 0;
-                        const progressInterval = setInterval(() => {
-                            progress = Math.min(progress + 5, 100);
-                            this.showProcessProgress('Извлечение видео', progress);
-                            if (progress >= 100) clearInterval(progressInterval);
-                        }, 100);
-
-                        ffmpeg.on('exit', () => {
-                            clearInterval(progressInterval);
-                            this.showProcessProgress('Извлечение видео', 100);
-                            console.log('\n');
-                        });
-                    });
-
-                    // Извлечение аудио с прогрессом
-                    console.log('Извлечение аудио...');
-                    await new Promise((resolve, reject) => {
-                        const ffmpeg = exec(`ffmpeg -i "${segmentPath}" -ac 1 -ar 16000 "${audioPath}"`,
-                            (error, stdout, stderr) => {
-                                if (error) {
-                                    console.error('Ошибка при извлечении аудио:', stderr);
-                                    reject(error);
-                                } else resolve();
-                            }
-                        );
-
-                        let progress = 0;
-                        const progressInterval = setInterval(() => {
-                            progress = Math.min(progress + 10, 100);
-                            this.showProcessProgress('Извлечение аудио', progress);
-                            if (progress >= 100) clearInterval(progressInterval);
-                        }, 100);
-
-                        ffmpeg.on('exit', () => {
-                            clearInterval(progressInterval);
-                            this.showProcessProgress('Извлечение аудио', 100);
-                            console.log('\n');
-                        });
-                    });
-
-                    // Анализ движения с прогрессом
-                    console.log('Анализ движения...');
-                    let motionProgress = 0;
-                    const motionInterval = setInterval(() => {
-                        motionProgress = Math.min(motionProgress + 5, 95);
-                        this.showProcessProgress('Анализ движения', motionProgress);
-                    }, 100);
-
-                    const motionData = await this.analyzeMotion(segmentPath);
-                    clearInterval(motionInterval);
-                    this.showProcessProgress('Анализ движения', 100);
-                    console.log('\n');
-
-                    // Анализ аудио с прогрессом
-                    console.log('Анализ аудио...');
-                    let audioProgress = 0;
-                    const audioInterval = setInterval(() => {
-                        audioProgress = Math.min(audioProgress + 5, 95);
-                        this.showProcessProgress('Анализ аудио', audioProgress);
-                    }, 100);
-
-                    const audioData = await this.analyzeAudio(audioPath);
-                    clearInterval(audioInterval);
-                    this.showProcessProgress('Анализ аудио', 100);
-                    console.log('\n');
-
-                    // Извлечение кадра с прогрессом
-                    console.log('Извлечение кадра...');
-                    await new Promise((resolve, reject) => {
-                        const ffmpeg = exec(`ffmpeg -i "${videoPath}" -ss ${time} -vframes 1 -q:v 2 "${framePath}"`,
-                            (error, stdout, stderr) => {
-                                if (error) {
-                                    console.error('Ошибка при извлечении кадра:', stderr);
-                                    reject(error);
-                                } else resolve();
-                            }
-                        );
-
-                        let progress = 0;
-                        const progressInterval = setInterval(() => {
-                            progress = Math.min(progress + 10, 100);
-                            this.showProcessProgress('Извлечение кадра', progress);
-                            if (progress >= 100) clearInterval(progressInterval);
-                        }, 50);
-
-                        ffmpeg.on('exit', () => {
-                            clearInterval(progressInterval);
-                            this.showProcessProgress('Извлечение кадра', 100);
-                            console.log('\n');
-                        });
-                    });
-
-                    // Анализ сегмента
-                    console.log('Комплексный анализ контента...');
-                    const contentAnalysis = await this.analyzeVideoContent(time, framePath, audioData, motionData);
-
-                    // Анализируем эмоциональный потенциал
-                    const emotionalResponse = await this.makeGPTRequest(
-                        "gpt-4",
+                    // Первичный анализ с gpt-3.5-turbo
+                    const initialAnalysis = await this.makeGPTRequest(
+                        "gpt-3.5-turbo",
                         [
                             {
                                 role: "system",
-                                content: `Ты - эксперт по вирусному контенту. Проанализируй этот момент видео и оцени:
-                                1. Эмоциональный отклик (1-10)
-                                2. Вирусный потенциал (1-10)
-                                3. Предложи кликбейтное название
-                                4. Опиши, какие эмоции может вызвать у зрителя
-
-                                Учитывай:
-                                - Движение: ${motionData.description}
-                                - Звук: ${audioData.description}
-                                - Контент: ${contentAnalysis}`
+                                content: `Оцени потенциал момента для вирусного видео по шкале 1-10.
+                                Движение: ${motionData.intensity}/10
+                                Звук: ${audioData.volume}/10
+                                Описание движения: ${motionData.description}
+                                Звуковые эффекты: ${audioData.description}`
                             },
                             {
                                 role: "user",
-                                content: "Дай подробный анализ этого момента"
+                                content: "Дай краткую оценку этого момента"
                             }
                         ],
-                        200
+                        50 // Минимальное количество токенов
                     );
 
-                    const analysis = emotionalResponse.choices[0].message.content;
+                    const quickScore = parseInt(initialAnalysis.choices[0].message.content.match(/\d+/)[0]) || 5;
 
-                    // Извлекаем оценки и название
-                    const emotionalScore = parseInt(analysis.match(/Эмоциональный отклик.*?(\d+)/)?.[1] || "5");
-                    const viralScore = parseInt(analysis.match(/Вирусный потенциал.*?(\d+)/)?.[1] || "5");
-                    const title = analysis.match(/Предложи кликбейтное название:?\s*(.*?)(?:\n|$)/)?.[1] || "Интересный момент";
+                    // Детальный анализ только для перспективных моментов
+                    if (quickScore >= 7) {
+                        const detailedAnalysis = await this.makeGPTRequest(
+                            "gpt-4",
+                            [
+                                {
+                                    role: "system",
+                                    content: `Ты - эксперт по вирусным видео. Проанализируй этот момент:
+                                    1. Эмоциональный отклик (1-10)
+                                    2. Вирусный потенциал (1-10)
+                                    3. Предложи кликбейтное название
+                                    4. Опиши эмоции, которые вызовет этот момент`
+                                },
+                                {
+                                    role: "user",
+                                    content: `Анализ момента:
+                                    - Движение: ${motionData.description}
+                                    - Звук: ${audioData.description}
+                                    - Первичная оценка: ${quickScore}/10`
+                                }
+                            ],
+                            150
+                        );
 
-                    segments.push({
-                        time,
-                        emotionalScore,
-                        viralScore,
-                        title,
-                        description: analysis,
-                        motionScore: motionData.intensity,
-                        audioScore: audioData.volume,
-                        score: (emotionalScore + viralScore) / 2
-                    });
+                        const analysis = detailedAnalysis.choices[0].message.content;
+                        const emotionalScore = parseInt(analysis.match(/Эмоциональный отклик.*?(\d+)/)?.[1] || "5");
+                        const viralScore = parseInt(analysis.match(/Вирусный потенциал.*?(\d+)/)?.[1] || "5");
+                        const title = analysis.match(/Предложи кликбейтное название:?\s*(.*?)(?:\n|$)/)?.[1] || "Интересный момент";
 
-                    // Очищаем временные файлы
+                        segments.push({
+                            time,
+                            emotionalScore,
+                            viralScore,
+                            title,
+                            description: analysis,
+                            motionScore: motionData.intensity,
+                            audioScore: audioData.volume,
+                            score: (emotionalScore + viralScore + quickScore) / 3
+                        });
+                    }
+
+                    // Очистка временных файлов сразу после использования
                     await Promise.all([
-                        fs.unlink(segmentPath).catch(() => {}),
-                        fs.unlink(audioPath).catch(() => {}),
-                        fs.unlink(framePath).catch(() => {})
+                        fs.unlink(segment.path).catch(() => {}),
+                        fs.unlink(segment.audioPath).catch(() => {})
                     ]);
 
-                    this.showProcessProgress('Анализ видео', (time / duration) * 100);
                 } catch (segmentError) {
-                    console.error(`Ошибка при обработке сегмента ${time}:`, segmentError);
+                    console.error(`Ошибка при обработке сегмента ${segment.time}:`, segmentError);
                     continue;
                 }
             }
-
-            // Выводим итоговую статистику анализа
-            console.log('\n=== Итоговая статистика анализа видео ===');
-            console.log(`Проанализировано сегментов: ${segmentsAnalyzed}/${totalSegments}`);
-            console.log(`Использовано токенов: ${sessionTokens}`);
-            console.log(`Стоимость анализа: $${sessionCost.toFixed(4)}`);
-            console.log(`Среднее токенов на сегмент: ${Math.round(sessionTokens/segmentsAnalyzed)}`);
-            console.log('==========================================\n');
 
             // Очищаем временную директорию
             await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
 
             // Находим лучшие моменты
             const highlights = this.findBestHighlights(segments, duration);
-            console.log('\nНайдены потенциально вирусные моменты:');
+
+            // Выводим итоговую статистику
+            this.showFinalStats();
+            console.log('\n🎯 Найдены потенциально вирусные моменты:');
             highlights.forEach((highlight, index) => {
                 console.log(`\n🎬 Шортс ${index + 1}:`);
                 console.log(`📝 Название: ${highlight.title}`);
@@ -538,8 +459,6 @@ class YouTubeShortsGenerator {
                 console.log(`🌟 Вирусный потенциал: ${highlight.averageViralScore.toFixed(1)}/10`);
                 console.log(`🎭 Движение: ${highlight.averageMotion.toFixed(1)}/10`);
                 console.log(`🔊 Аудио: ${highlight.averageAudio.toFixed(1)}/10`);
-                console.log(`\n📊 Анализ момента:`);
-                console.log(highlight.description);
             });
 
             return highlights;
@@ -898,6 +817,102 @@ class YouTubeShortsGenerator {
         console.log(`Всего использовано токенов: ${this.totalTokens}`);
         console.log(`Общая стоимость: $${this.totalCost.toFixed(4)}`);
         console.log('==========================================\n');
+    }
+
+    async quickScan(videoPath, intervals) {
+        try {
+            const duration = await this.getVideoDuration(videoPath);
+            const segments = [];
+
+            for (let time = 0; time < duration; time += intervals) {
+                const segmentPath = path.join(this.outputDir, `quick_segment_${time}.mp4`);
+                const audioPath = path.join(this.outputDir, `quick_audio_${time}.wav`);
+
+                // Быстрое извлечение сегмента
+                await new Promise((resolve, reject) => {
+                    exec(`ffmpeg -i "${videoPath}" -ss ${time} -t ${intervals} -c:v copy -c:a copy "${segmentPath}"`,
+                        (error) => error ? reject(error) : resolve()
+                    );
+                });
+
+                // Извлечение аудио
+                await new Promise((resolve, reject) => {
+                    exec(`ffmpeg -i "${segmentPath}" -ac 1 -ar 16000 "${audioPath}"`,
+                        (error) => error ? reject(error) : resolve()
+                    );
+                });
+
+                // Быстрый анализ движения и звука
+                const [motionIntensity, audioVolume] = await Promise.all([
+                    this.getQuickMotionScore(segmentPath),
+                    this.getQuickAudioScore(audioPath)
+                ]);
+
+                // Если сегмент потенциально интересный
+                if (motionIntensity > 3 || audioVolume > 3) {
+                    segments.push({
+                        time,
+                        path: segmentPath,
+                        audioPath,
+                        initialScore: (motionIntensity + audioVolume) / 2
+                    });
+                } else {
+                    // Удаляем неинтересные сегменты сразу
+                    await Promise.all([
+                        fs.unlink(segmentPath).catch(() => {}),
+                        fs.unlink(audioPath).catch(() => {})
+                    ]);
+                }
+            }
+
+            // Сортируем сегменты по начальной оценке
+            segments.sort((a, b) => b.initialScore - a.initialScore);
+
+            // Возвращаем только самые перспективные сегменты
+            return segments.slice(0, Math.min(segments.length, 10));
+        } catch (error) {
+            console.error('Ошибка при быстром сканировании:', error);
+            return [];
+        }
+    }
+
+    async getQuickMotionScore(videoPath) {
+        try {
+            const result = await new Promise((resolve, reject) => {
+                exec(
+                    `ffmpeg -i "${videoPath}" -filter:v "select='gt(scene,0.1)',metadata=print:file=-" -f null -`,
+                    (error, stdout, stderr) => {
+                        if (error && !stderr.includes('video:0kB')) reject(error);
+                        else resolve(stderr);
+                    }
+                );
+            });
+
+            const sceneChanges = (result.match(/scene:[\d.]+/g) || []).length;
+            return Math.min(Math.ceil(sceneChanges * 2), 10);
+        } catch (error) {
+            return 5;
+        }
+    }
+
+    async getQuickAudioScore(audioPath) {
+        try {
+            const result = await new Promise((resolve, reject) => {
+                exec(
+                    `ffmpeg -i "${audioPath}" -filter:a volumedetect -f null /dev/null 2>&1`,
+                    (error, stdout, stderr) => {
+                        if (error && !stderr.includes('audio:0kB')) reject(error);
+                        else resolve(stderr);
+                    }
+                );
+            });
+
+            const maxVolumeMatch = result.match(/max_volume: ([-\d.]+) dB/);
+            const maxVolume = maxVolumeMatch ? parseFloat(maxVolumeMatch[1]) : -70;
+            return Math.min(Math.max(((maxVolume + 70) / 70) * 10, 0), 10);
+        } catch (error) {
+            return 5;
+        }
     }
 }
 
